@@ -24,6 +24,9 @@ description:
  - allows the addition, modification and deletion of ACL keys and associated
    rules in a consul cluster via the agent. For more details on using and
    configuring ACLs, see https://www.consul.io/docs/internals/acl.html.
+   In some cases you may want to pre-generate ACL ids. You can
+   use the following shell command to generate one
+   `python -c "import uuid; print(uuid.uuid1())"`
 requirements:
   - "python >= 2.6"
   - python-consul
@@ -77,6 +80,18 @@ EXAMPLES = '''
         mgmt_token: 'some_management_acl'
         host: 'consul1.mycluster.io'
         name: 'Foo access'
+        rules:
+          - key: 'foo'
+            policy: read
+          - key: 'private/foo'
+            policy: deny
+
+    - name: create or update an acl token with a pre-generated acl id
+      consul_acl:
+        mgmt_token: 'some_management_acl'
+        host: 'consul1.mycluster.io'
+        name: 'Foo access'
+        token: '90338582-a7be-11e5-aee8-600308a9a3ae'
         rules:
           - key: 'foo'
             policy: read
@@ -143,18 +158,25 @@ def update_acl(module):
     changed = False
 
     try:
-
         if token:
-            existing_rules = load_rules_for_token(module, consul, token)
+            exists = token_exists(consul, token)
             supplied_rules = yml_to_rules(module, rules)
-            changed = not existing_rules == supplied_rules
-            if changed:
-                y = supplied_rules.to_hcl()
-                token = consul.acl.update(
-                    token,
-                    name=name,
+            if exists:
+                existing_rules = load_rules_for_token(module, consul, token)
+                changed = not existing_rules == supplied_rules
+                if changed:
+                    token = consul.acl.update(
+                        token,
+                        name=name,
+                        type=token_type,
+                        rules=supplied_rules.to_hcl())
+            else:
+                token = consul.acl.create(
+                    acl_id=token,
                     type=token_type,
+                    name=name,
                     rules=supplied_rules.to_hcl())
+                changed = True
         else:
             try:
                 rules = yml_to_rules(module, rules)
@@ -191,6 +213,12 @@ def remove_acl(module):
         token = consul.acl.destroy(token)
 
     module.exit_json(changed=changed, token=token)
+
+
+def token_exists(consul_api, token):
+    info = consul_api.acl.info(token)
+    return bool(info)
+
 
 def load_rules_for_token(module, consul_api, token):
     try:
